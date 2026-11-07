@@ -27,7 +27,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context as _, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory as _, Parser, Subcommand};
+use clap_complete::Shell;
 use secrecy::{ExposeSecret as _, SecretString};
 use uuid::Uuid;
 
@@ -146,6 +147,11 @@ enum Command {
     Hooks(hooks::HooksArgs),
     /// Run an installed Git hook. Git calls this from the hook script.
     Hook(hooks::HookArgs),
+    /// Print a shell completion script, for example `eval "$(proofline completions zsh)"`.
+    Completions {
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -372,6 +378,7 @@ pub async fn run(cli: Cli, token: Option<SecretString>) -> anyhow::Result<Verdic
             update::check().await;
             return Ok(Verdict::Done);
         }
+        Command::Completions { shell } => return completions(*shell).map(|()| Verdict::Done),
         _ => {}
     }
     let origin = Origin::parse(&cli.base_url)?;
@@ -381,6 +388,7 @@ pub async fn run(cli: Cli, token: Option<SecretString>) -> anyhow::Result<Verdic
             update::check().await;
             Ok(Verdict::Done)
         }
+        Command::Completions { shell } => completions(shell).map(|()| Verdict::Done),
         Command::Setup {
             print,
             organization,
@@ -534,6 +542,14 @@ pub async fn run(cli: Cli, token: Option<SecretString>) -> anyhow::Result<Verdic
         }
         Command::Hook(args) => hooks::run(args, origin, token, cli.org).await,
     }
+}
+
+/// Writes the script in one piece, so a closed pipe is an error, not a panic.
+fn completions(shell: Shell) -> anyhow::Result<()> {
+    let mut script = Vec::new();
+    clap_complete::generate(shell, &mut Cli::command(), "proofline", &mut script);
+    std::io::stdout().lock().write_all(&script)?;
+    Ok(())
 }
 
 async fn connect(

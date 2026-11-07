@@ -3,6 +3,8 @@
 The command-line client for the [Proofline review API](https://proofline.sh/docs/).
 
 Install with `curl -fsSL https://proofline.sh/cli | sh`, then run `proofline login`.
+Enable tab completion with `eval "$(proofline completions zsh)"` in `~/.zshrc`.
+Supported shells are `bash`, `zsh`, `fish`, `elvish` and `powershell`.
 To register MCP without a prompt, run `proofline agent install CLIENT --yes`.
 Clients include `claude-code` (or `claude`), `cursor`, `codex`, `gemini` and `kiro`.
 Without `--yes`, the command previews the entry and asks for confirmation.
@@ -125,6 +127,8 @@ in a directory on PATH. Run `proofline login` to store credentials in Windows
 Credential Manager. To update, close running Proofline processes and replace the
 executable from a verified release. The Unix shell installer and self-update command
 do not install Windows binaries.
+For PowerShell completion, add `proofline completions powershell | Out-String | Invoke-Expression`
+to your profile.
 
 ## Fix context and pushed fixes
 
