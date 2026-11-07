@@ -166,6 +166,11 @@ struct CiReviewArgs {
     /// request's head on a GitHub Actions pull-request event, then `GITHUB_SHA`.
     #[arg(long, value_name = "SHA")]
     commit: Option<String>,
+    /// Read only this pull request's review of the commit, for a commit that
+    /// heads several pull requests. Defaults to the pull-request event's own
+    /// number when the commit is that event's head.
+    #[arg(long, value_name = "NUMBER")]
+    pr: Option<u64>,
     /// Also write the review as SARIF 2.1.0 to this file.
     #[arg(long, value_name = "FILE")]
     sarif: Option<PathBuf>,
@@ -511,8 +516,11 @@ pub async fn run(cli: Cli, token: Option<SecretString>) -> anyhow::Result<Verdic
             mcp::run(&http, &credential.token).await?;
             Ok(Verdict::Done)
         }
-        Command::Ci(CiCommand::Review(args)) => {
+        Command::Ci(CiCommand::Review(mut args)) => {
             let commit = ci_commit(args.commit.as_deref())?;
+            if args.pr.is_none() {
+                args.pr = github_actions::pull_request_number(&commit);
+            }
             let http = Http::new(origin)?;
             let event = std::env::var(github_actions::EVENT_NAME).unwrap_or_default();
             let issuer = github_actions::Issuer::from_environment();
@@ -1118,9 +1126,12 @@ async fn ci_review(
     let deadline = poll_deadline(args.timeout)?;
     let (name, repository_id) = connected_repository(api, &args.repository).await?;
     let mut delay = FIRST_POLL_SECONDS;
+    let number = args.pr.map(i64::try_from).transpose()?;
     let review_id = loop {
         let found = latest(api, repository_id, commit, |item| {
-            item.kind == "PULL_REQUEST" && item.head_commit_sha.as_deref() == Some(commit)
+            item.kind == "PULL_REQUEST"
+                && item.head_commit_sha.as_deref() == Some(commit)
+                && number.is_none_or(|number| item.pull_request_number == Some(number))
         })
         .await?;
         if let Some(id) = found {
@@ -1450,6 +1461,7 @@ mod tests {
             );
             let args = CiReviewArgs {
                 commit: None,
+                pr: None,
                 sarif: None,
                 json: false,
                 timeout: 3,

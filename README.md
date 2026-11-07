@@ -116,6 +116,14 @@ Knowledge reads need `reviews:read` and `knowledge:read`. Implementation also ne
 opens that GitHub organization's installation page; `--print` only prints its address.
 Cloud trust and connection changes still require a signed-in administrator browser.
 
+## CI review and shared heads
+
+`proofline ci review` reads the pull-request review of the commit under test.
+A commit that heads several pull requests, such as a backport branch, has one
+review per pull request. In a GitHub Actions pull-request job the CLI reads that
+event's own pull request. Elsewhere, name it with `--pr NUMBER`; without a
+number the newest review of the commit is read.
+
 ## Windows
 
 Official releases include `proofline-x86_64-pc-windows-msvc.tar.gz` with `proofline.exe`.

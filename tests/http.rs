@@ -1879,6 +1879,99 @@ async fn ci_review_fail_on_exits_three_for_an_open_finding_of_a_complete_review(
     assert!(requests.lock().unwrap().is_empty());
 }
 
+/// One commit heads two pull requests, as a backport does. The newer review
+/// is clean; the older one has an open SERIOUS finding.
+const OTHER_REVIEW: &str = "0190f3a0-0000-7000-8000-0000000000f6";
+
+#[tokio::test]
+async fn ci_review_reads_only_the_named_pull_requests_review_of_a_shared_head() {
+    let reviews = [(OTHER_REVIEW, 7, [0, 0]), (CI_REVIEW, 12, [1, 1])];
+    let items: Vec<Value> = reviews
+        .iter()
+        .map(|(id, number, _)| {
+            json!({
+                "id": id, "kind": "PULL_REQUEST", "status": "COMPLETED",
+                "created_at": "2026-10-01T00:00:00Z", "head_commit_sha": CI_HEAD,
+                "pull_request_number": number, "repository_id": CI_REPOSITORY,
+                "run_number": 1,
+            })
+        })
+        .collect();
+    let read = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&read);
+    let mut app = Router::new()
+        .route(
+            &format!("/api/v1/organizations/{ORG}/repository-names"),
+            get(|| async {
+                Json(json!({ "repositories": [{ "id": CI_REPOSITORY, "full_name": "acme/app" }] }))
+            }),
+        )
+        .route(
+            &format!("/api/v1/organizations/{ORG}/reviews"),
+            get(move || {
+                let items = items.clone();
+                async move {
+                    Json(json!({
+                        "items": items, "next_cursor": null, "truncated": false,
+                        "filters": { "repositories": [], "environments": [], "authors": [] },
+                    }))
+                }
+            }),
+        );
+    for (id, number, [open, serious]) in reviews {
+        let seen = Arc::clone(&seen);
+        app = app.route(
+            &format!("/api/v1/organizations/{ORG}/reviews/{id}"),
+            get(move || {
+                seen.lock().unwrap().push(number);
+                async move {
+                    Json(json!({
+                        "id": id, "kind": "PULL_REQUEST", "status": "COMPLETED",
+                        "head_commit_sha": CI_HEAD, "pull_request_number": number,
+                        "run_number": 1, "assessment_count": 1,
+                        "open_items": {
+                            "open_findings": open, "serious_findings": serious,
+                            "accepted_risks": 0, "not_assessed": [],
+                        },
+                        "assessments": [{
+                            "id": "0190f3a0-0000-7000-8000-0000000000f2",
+                            "environment_display_name": "production",
+                            "status": "COMPLETED", "findings": [],
+                            "checks": { "receipt_recorded": true, "status": "READY", "families": [] },
+                        }],
+                    }))
+                }
+            }),
+        );
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    // Without a number the newest review of the head is read, as before.
+    for (pr, code, read_number) in [
+        (None, 0, Some(7)),
+        (Some("12"), 3, Some(12)),
+        (Some("7"), 0, Some(7)),
+        // No review of this pull request: unavailable, and no other is read.
+        (Some("99"), 4, None),
+    ] {
+        read.lock().unwrap().clear();
+        let mut args = vec!["ci", "review", "--repo", "acme/app", "--commit", CI_HEAD];
+        args.extend(["--timeout", "0", "--fail-on", "serious"]);
+        if let Some(number) = pr {
+            args.extend(["--pr", number]);
+        }
+        let output = cli(&origin, &args).await;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{pr:?}: {stderr}");
+        assert_eq!(
+            read.lock().unwrap().first().copied(),
+            read_number,
+            "{pr:?}: {stderr}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn native_tools_keep_tenant_paths_and_reruns_make_one_attempt() {
     let requests = Arc::new(Mutex::new(Vec::new()));

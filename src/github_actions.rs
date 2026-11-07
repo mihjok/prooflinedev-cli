@@ -80,6 +80,8 @@ struct PullRequestEvent {
 
 #[derive(Deserialize)]
 struct PullRequest {
+    #[serde(default)]
+    number: Option<u64>,
     head: Head,
 }
 
@@ -106,6 +108,28 @@ pub fn commit_under_test() -> anyhow::Result<Option<String>> {
     let payload = std::fs::read(path).with_context(unreadable)?;
     let parsed: PullRequestEvent = serde_json::from_slice(&payload).with_context(unreadable)?;
     Ok(Some(parsed.pull_request.head.sha))
+}
+
+/// The number of the pull request a `pull_request*` job runs for, when
+/// `commit` is that pull request's head. Any other commit names no number.
+pub fn pull_request_number(commit: &str) -> Option<u64> {
+    let event = std::env::var(EVENT_NAME).unwrap_or_default();
+    if !event.starts_with("pull_request") {
+        return None;
+    }
+    let payload = std::fs::read(std::env::var_os(EVENT_PATH)?).ok()?;
+    number_in(&payload, commit)
+}
+
+fn number_in(payload: &[u8], commit: &str) -> Option<u64> {
+    let pull_request = serde_json::from_slice::<PullRequestEvent>(payload)
+        .ok()?
+        .pull_request;
+    pull_request
+        .head
+        .sha
+        .eq_ignore_ascii_case(commit)
+        .then_some(pull_request.number?)
 }
 
 /// The events whose signed `ref` is the pull request's merge ref. The exchange
@@ -227,5 +251,27 @@ impl ReviewRequest {
                 .protocol("the review request response is malformed")
         })?;
         Ok(requested.review_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::number_in;
+
+    const HEAD: &str = "89abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn the_event_number_applies_only_to_its_own_head() {
+        let payload = format!(r#"{{"pull_request":{{"number":12,"head":{{"sha":"{HEAD}"}}}}}}"#);
+        assert_eq!(number_in(payload.as_bytes(), HEAD), Some(12));
+        assert_eq!(
+            number_in(payload.as_bytes(), &HEAD.to_uppercase()),
+            Some(12)
+        );
+        // an override commit is not the event's head
+        assert_eq!(number_in(payload.as_bytes(), &"f".repeat(40)), None);
+        let unnumbered = format!(r#"{{"pull_request":{{"head":{{"sha":"{HEAD}"}}}}}}"#);
+        assert_eq!(number_in(unnumbered.as_bytes(), HEAD), None);
+        assert_eq!(number_in(b"{}", HEAD), None);
     }
 }
